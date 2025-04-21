@@ -70,7 +70,7 @@ class BasicTrainer:
             self._train_epoch(epoch)
             
             if epoch % self.config["val_interval"] == 0:
-                _, ndcg_list = self._eval_model(epoch, eval_type='val')
+                _, ndcg_list, _, _ = self._eval_model(epoch, eval_type='val')
                 if self.config["with_fakes"]:
                     self.eval_attacks(epoch)
 
@@ -86,11 +86,11 @@ class BasicTrainer:
         
         if best_metrics != -1.0:
             self._load_model(self.model_path)
-        rc_list, ndcg_list = self._eval_model(eval_type='test')
+        rc_list, ndcg_list, precision_list, map_list = self._eval_model(eval_type='test')
         if self.config["with_fakes"]:
             self.eval_attacks()
 
-        return rc_list, ndcg_list
+        return rc_list, ndcg_list, precision_list, map_list
 
 
     def _eval_target(self, batch_idx, k, targe_item):
@@ -172,6 +172,8 @@ class CFTrainer(BasicTrainer):
         top_ks = self.config["top_k"]
         recall_list = [0 for _ in self.config["top_k"]]
         ndcg_list = [0 for _ in self.config["top_k"]]
+        precision_list = [0 for _ in self.config["top_k"]]
+        map_list = [0 for _ in self.config["top_k"]]
         user_list = list(range(self.dataset.n_users))
         eval_user = 0
         for batch_data in batch_split(users=user_list, batch_size=self.config["test_batch_size"]):
@@ -188,9 +190,9 @@ class CFTrainer(BasicTrainer):
             for idx, user_train_items in enumerate(user_train_list):
                 score_list[idx, user_train_items] = float('-inf')
 
-            batch_recall, batch_ndcg = [], []
+            batch_recall, batch_ndcg, batch_precision, batch_map = [], [], [], []
             for k in top_ks:
-                recall_k, ndcg_k = 0, 0
+                recall_k, ndcg_k, precision_k, map_k = 0, 0, 0, 0
                 for user_idx, user_inter_items in enumerate(user_inter_list):
                     _, top_indices = torch.topk(score_list[user_idx], k)
 
@@ -208,15 +210,30 @@ class CFTrainer(BasicTrainer):
                     idcg = 1 if idcg == 0 else idcg
                     ndcg_k += dcg / idcg
 
+                    # Precision@k
+                    precision_k += num_hits / k
+
+                    # MAP@k
+                    hits = [1 if item in user_inter_items else 0 for item in top_indices]
+                    if sum(hits) > 0:
+                        precisions = [sum(hits[:i+1])/(i+1) for i in range(k) if hits[i] == 1]
+                        map_k += sum(precisions) / len(user_inter_items)
+
                 batch_recall.append(recall_k)
                 batch_ndcg.append(ndcg_k)
+                batch_precision.append(precision_k)
+                batch_map.append(map_k)
             eval_user += len(user_inter_list)
 
             recall_list = [recall + brecall for recall, brecall in zip(recall_list, batch_recall)]
             ndcg_list = [ndcg + bndcg for ndcg, bndcg in zip(ndcg_list, batch_ndcg)]
+            precision_list = [precision + bprecision for precision, bprecision in zip(precision_list, batch_precision)]
+            map_list = [map + bmap for map, bmap in zip(map_list, batch_map)]
 
         recall_list = [recall / eval_user for recall in recall_list]
         ndcg_list = [ndcg / eval_user for ndcg in ndcg_list]
+        precision_list = [precision / eval_user for precision in precision_list]
+        map_list = [map / eval_user for map in map_list]
 
         if eval_type == 'val':
             out_text = f"Recomendation Performance at Epoch {epoch} :"
@@ -224,11 +241,11 @@ class CFTrainer(BasicTrainer):
             out_text = f"Final Recomendation Performance:"
 
         for i, k in enumerate(top_ks):
-            out_text += f"\nRecall@{k}: {recall_list[i]:.4f}, NDCG@{k}: {ndcg_list[i]:.4f};"
+            out_text += f"\nRecall@{k}: {recall_list[i]:.4f}, NDCG@{k}: {ndcg_list[i]:.4f}, Precision@{k}: {precision_list[i]:.4f}, MAP@{k}: {map_list[i]:.4f};"
         
         print(out_text)
 
-        return recall_list, ndcg_list
+        return recall_list, ndcg_list, precision_list, map_list
 
     def _rec_loss(self, pos, neg):
         return F.softplus(neg - pos)
