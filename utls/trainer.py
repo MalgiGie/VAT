@@ -104,6 +104,9 @@ class BasicTrainer:
         self.model.eval()
         hr_list = []
         ndcg_list = []
+
+        self.user_with_atk = [{} for _ in range(self.dataset.n_users)] # DODANE
+
         user_list = list(range(self.dataset.n_users))
         for idx, k in enumerate(top_ks):
             avg_hr = np.zeros(len(targe_item))
